@@ -1,4 +1,4 @@
-import { initializeApp } from 'firebase/app';
+import { initializeApp } from "firebase/app";
 import {
   getAuth,
   createUserWithEmailAndPassword,
@@ -6,10 +6,19 @@ import {
   signOut as firebaseSignOut,
   onAuthStateChanged as firebaseOnAuthStateChanged,
   User,
-  UserCredential
-} from 'firebase/auth';
-import { getFirestore, doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
-import { getDatabase } from 'firebase/database';
+  UserCredential,
+} from "firebase/auth";
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  collection,
+  query,
+  where,
+  getDocs,
+} from "firebase/firestore";
+import { getDatabase } from "firebase/database";
 
 // User roles
 export type UserRole = "cashier" | "manager" | "owner";
@@ -73,7 +82,7 @@ const firebaseConfig = {
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
   storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
 // Initialize Firebase
@@ -87,9 +96,17 @@ export { firestore, database };
 
 // Firebase authentication wrapper
 export const firebaseAuth = {
-  signUp: async (data: { email: string; password: string; metadata?: any }): Promise<UserCredential> => {
+  signUp: async (data: {
+    email: string;
+    password: string;
+    metadata?: any;
+  }): Promise<UserCredential> => {
     try {
-      const userCredential = await createUserWithEmailAndPassword(auth, data.email, data.password);
+      const userCredential = await createUserWithEmailAndPassword(
+        auth,
+        data.email,
+        data.password,
+      );
 
       // Store user role in localStorage for now (in a real app, you'd store this in Firestore)
       if (data.metadata?.role) {
@@ -103,13 +120,20 @@ export const firebaseAuth = {
     }
   },
 
-  signInWithEmailAndPassword: async (email: string, password: string): Promise<UserCredential> => {
+  signInWithEmailAndPassword: async (
+    email: string,
+    password: string,
+  ): Promise<UserCredential> => {
     try {
-      const userCredential = await firebaseSignInWithEmailAndPassword(auth, email, password);
+      const userCredential = await firebaseSignInWithEmailAndPassword(
+        auth,
+        email,
+        password,
+      );
 
       // Try to get the user's role from Firestore
       try {
-        const userDocRef = doc(firestore, 'users', userCredential.user.uid);
+        const userDocRef = doc(firestore, "users", userCredential.user.uid);
         const userDocSnap = await getDoc(userDocRef);
 
         if (userDocSnap.exists() && userDocSnap.data()?.role) {
@@ -165,7 +189,7 @@ export const getUserRole = async (): Promise<UserRole> => {
 
     // Try to get the role from Firestore first
     try {
-      const userDocRef = doc(firestore, 'users', user.uid);
+      const userDocRef = doc(firestore, "users", user.uid);
       const userDocSnap = await getDoc(userDocRef);
 
       if (userDocSnap.exists() && userDocSnap.data()?.role) {

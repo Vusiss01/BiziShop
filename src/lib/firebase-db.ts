@@ -26,13 +26,16 @@ import {
 } from 'firebase/database';
 import { firestore, database } from './firebase';
 import { UserRole } from './firebase';
+import { Review, Order, InventoryItem, Product, User, Restaurant } from '../types/models'; // Added User and Restaurant imports
 
 // Firestore Operations
 export const firestoreDB = {
   // Create or update a document
-  setDocument: async (collectionName: string, docId: string, data: any): Promise<void> => {
+  setDocument: async (collectionName: string, docId: string, data: DocumentData): Promise<void> => {
     try {
       const docRef = doc(firestore, collectionName, docId);
+      // Ensure data is an object before passing to setDoc, though DocumentData type should guarantee this.
+      // The { merge: true } option is good for updates.
       await setDoc(docRef, data, { merge: true });
     } catch (error) {
       console.error(`Error setting document in ${collectionName}:`, error);
@@ -47,7 +50,9 @@ export const firestoreDB = {
       const docSnap = await getDoc(docRef);
 
       if (docSnap.exists()) {
-        return { id: docSnap.id, ...docSnap.data() };
+        // Ensure docSnap.data() is an object before spreading
+        const data = docSnap.data();
+        return { id: docSnap.id, ...(data || {}) }; 
       } else {
         return null;
       }
@@ -74,9 +79,10 @@ export const firestoreDB = {
       return querySnapshot.docs.map(doc => {
         const data = doc.data();
         console.log(`Document data for ${doc.id}:`, data);
+        // Ensure data is an object before spreading
         return {
           id: doc.id,
-          ...data
+          ...(data || {}) 
         };
       });
     } catch (error) {
@@ -97,10 +103,13 @@ export const firestoreDB = {
       const q = query(collectionRef, where(fieldPath, operator, value));
       const querySnapshot = await getDocs(q);
 
-      return querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
+      return querySnapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...(data || {}) // Ensure data is an object before spreading
+        };
+      });
     } catch (error) {
       console.error(`Error querying collection ${collectionName}:`, error);
       throw error;
@@ -128,6 +137,60 @@ export const firestoreDB = {
       throw error;
     }
   }
+};
+
+// Review-related database operations
+export const reviewDB = {
+  // Get all reviews for a specific restaurant
+  getReviewsByRestaurantId: async (restaurantId: string): Promise<DocumentData[]> => {
+    try {
+      // Assuming reviews are stored in a 'reviews' collection
+      // and each review document has a 'restaurantId' field.
+      return firestoreDB.queryCollection('reviews', 'restaurantId', '==', restaurantId);
+    } catch (error) {
+      console.error(`Error fetching reviews for restaurant ${restaurantId}:`, error);
+      throw error;
+    }
+  },
+
+  // Add a new review
+  addReview: async (reviewData: Partial<Review>): Promise<string> => {
+    try {
+      const reviewId = doc(collection(firestore, 'reviews')).id; // Generate a new ID
+      
+      // Construct the data object for Firestore more explicitly
+      const dataToSet: any = { // Using 'any' temporarily for dataToSet to bypass strict checks during construction
+        id: reviewId,
+        createdAt: reviewData?.createdAt || new Date().toISOString(),
+      };
+
+      // Manually assign properties from reviewData to avoid spread issues
+      if (reviewData && typeof reviewData === 'object') {
+        for (const key in reviewData) {
+          if (Object.prototype.hasOwnProperty.call(reviewData, key)) {
+            // Ensure not to overwrite id and createdAt if they were part of reviewData
+            // and we want our generated/default ones to take precedence.
+            // However, the Review interface has id and createdAt as optional or specific,
+            // so this merging strategy should be fine.
+            if (key !== 'id' && key !== 'createdAt') {
+              dataToSet[key] = (reviewData as any)[key];
+            } else if (key === 'createdAt' && reviewData.createdAt) { 
+              // If reviewData specifically provides createdAt, use it.
+              dataToSet[key] = reviewData.createdAt;
+            }
+            // The 'id' from reviewData is ignored as we generate a new one.
+          }
+        }
+      }
+      
+      await firestoreDB.setDocument('reviews', reviewId, dataToSet as Review); // Cast to Review before sending
+      return reviewId;
+    } catch (error) {
+      console.error('Error adding review:', error);
+      throw error;
+    }
+  }
+  // Potentially add functions to get reviews by user, etc.
 };
 
 // Realtime Database Operations
@@ -199,8 +262,32 @@ export const realtimeDB = {
 // User-related database operations
 export const userDB = {
   // Create or update a user profile in Firestore
-  setUserProfile: async (userId: string, userData: any): Promise<void> => {
-    return firestoreDB.setDocument('users', userId, userData);
+  setUserProfile: async (userId: string, userData: Partial<User>): Promise<void> => {
+    const timestamp = new Date().toISOString();
+    const dataToSet: any = {
+      updatedAt: userData?.updatedAt || timestamp,
+      createdAt: userData?.createdAt || timestamp, // Assuming createdAt might be set on initial profile creation
+      // Initialize other User fields as needed
+      name: userData?.name || '',
+      email: userData?.email || '', // Email is likely required
+      role: userData?.role || 'cashier', // Default role
+    };
+
+    if (userData && typeof userData === 'object') {
+      for (const key in userData) {
+        if (Object.prototype.hasOwnProperty.call(userData, key)) {
+          if (!['updatedAt', 'createdAt'].includes(key) ||
+              (key === 'updatedAt' && userData.updatedAt) ||
+              (key === 'createdAt' && userData.createdAt) ) {
+            dataToSet[key] = (userData as any)[key];
+          }
+        }
+      }
+    }
+    // If 'id' field is part of User model and should store the userId:
+    // dataToSet.id = userId;
+    
+    return firestoreDB.setDocument('users', userId, dataToSet as User);
   },
 
   // Get a user profile from Firestore
@@ -223,23 +310,78 @@ export const userDB = {
 // Order-related database operations
 export const orderDB = {
   // Create a new order
-  createOrder: async (orderData: any): Promise<string> => {
+  createOrder: async (orderData: Partial<Order>): Promise<string> => {
     try {
-      // Add to Realtime Database for real-time updates
-      const orderId = await realtimeDB.pushData('orders', {
-        ...orderData,
-        createdAt: new Date().toISOString(),
-        status: 'pending'
-      });
+      const timestamp = new Date().toISOString();
+      
+      // Construct data for Realtime Database explicitly
+      const realtimeDataToSet: any = {
+        // id is typically generated by pushData, but if Order type requires it, provide a placeholder or manage accordingly
+        // For now, we assume pushData handles ID generation and we don't strictly need to set it here
+        // If orderData contains an 'id', it might be overwritten by Firebase push key or cause issues.
+        // Best practice is often to let Firebase generate the key for new entries.
+        createdAt: orderData?.createdAt || timestamp,
+        status: orderData?.status || 'pending',
+        items: orderData?.items || [],
+        subtotal: orderData?.subtotal || 0,
+        tax: orderData?.tax || 0,
+        total: orderData?.total || 0,
+        paymentMethod: orderData?.paymentMethod || '',
+        paymentStatus: orderData?.paymentStatus || 'pending',
+        cashierId: orderData?.cashierId || '',
+      };
+
+      if (orderData && typeof orderData === 'object') {
+        for (const key in orderData) {
+          if (Object.prototype.hasOwnProperty.call(orderData, key)) {
+            // Avoid overwriting properties we've explicitly set with defaults/fallbacks
+            // unless orderData provides a specific value for them.
+            if (!['createdAt', 'status', 'id'].includes(key)) { // 'id' is handled by Firebase push
+              realtimeDataToSet[key] = (orderData as any)[key];
+            } else if (key === 'createdAt' && orderData.createdAt) {
+              realtimeDataToSet.createdAt = orderData.createdAt;
+            } else if (key === 'status' && orderData.status) {
+              realtimeDataToSet.status = orderData.status;
+            }
+            // any 'id' in orderData is ignored for pushData
+          }
+        }
+      }
+      
+      const orderId = await realtimeDB.pushData('orders', realtimeDataToSet);
 
       // Also store in Firestore for better querying
-      await firestoreDB.setDocument('orders', orderId, {
-        ...orderData,
-        createdAt: new Date().toISOString(),
-        status: 'pending'
-      });
+      // Ensure orderId from pushData is used if it's the definitive ID
+      const firestoreOrderId = orderId; 
+      
+      const firestoreDataToSet: any = {
+        id: firestoreOrderId,
+        createdAt: orderData?.createdAt || timestamp,
+        status: orderData?.status || 'pending',
+        // Initialize other Order fields as needed or copy them over
+        items: orderData?.items || [],
+        subtotal: orderData?.subtotal || 0,
+        tax: orderData?.tax || 0,
+        total: orderData?.total || 0,
+        paymentMethod: orderData?.paymentMethod || '',
+        paymentStatus: orderData?.paymentStatus || 'pending',
+        cashierId: orderData?.cashierId || '', // Ensure all required fields from Order are handled
+      };
+      
+      // Manually assign other properties from orderData if they exist
+      if (orderData && typeof orderData === 'object') {
+        for (const key in orderData) {
+          if (Object.prototype.hasOwnProperty.call(orderData, key)) {
+            if (!['id', 'createdAt', 'status'].includes(key)) { // Avoid overwriting already set properties
+              firestoreDataToSet[key] = (orderData as any)[key];
+            }
+          }
+        }
+      }
 
-      return orderId;
+      await firestoreDB.setDocument('orders', firestoreOrderId, firestoreDataToSet as Order);
+
+      return firestoreOrderId;
     } catch (error) {
       console.error('Error creating order:', error);
       throw error;
@@ -272,11 +414,33 @@ export const orderDB = {
 // Inventory-related database operations
 export const inventoryDB = {
   // Add or update inventory item
-  setInventoryItem: async (itemId: string, itemData: any): Promise<void> => {
-    return firestoreDB.setDocument('inventory', itemId, {
-      ...itemData,
-      updatedAt: new Date().toISOString()
-    });
+  setInventoryItem: async (itemId: string, itemData: Partial<InventoryItem>): Promise<void> => {
+    const timestamp = new Date().toISOString();
+    const dataToSet: any = {
+      updatedAt: itemData?.updatedAt || timestamp,
+      // Initialize other InventoryItem fields as needed or copy them over
+      productId: itemData?.productId || '',
+      currentStock: itemData?.currentStock || 0,
+      minStock: itemData?.minStock || 0,
+      unit: itemData?.unit || '',
+      cost: itemData?.cost || 0,
+      status: itemData?.status || 'ok',
+    };
+
+    if (itemData && typeof itemData === 'object') {
+      for (const key in itemData) {
+        if (Object.prototype.hasOwnProperty.call(itemData, key)) {
+          if (key !== 'updatedAt') { // Avoid overwriting updatedAt if already set by itemData
+            dataToSet[key] = (itemData as any)[key];
+          }
+        }
+      }
+    }
+    // Ensure itemId is part of the document if your model expects it (it's usually the doc ID)
+    // If 'id' field is part of InventoryItem model and should store the itemId:
+    // dataToSet.id = itemId; 
+
+    return firestoreDB.setDocument('inventory', itemId, dataToSet as InventoryItem);
   },
 
   // Get all inventory items
@@ -301,37 +465,78 @@ export const inventoryDB = {
 // Menu-related database operations
 export const menuDB = {
   // Add or update menu item
-  setMenuItem: async (itemId: string, itemData: any): Promise<void> => {
-    return firestoreDB.setDocument('menu', itemId, {
-      ...itemData,
-      updatedAt: new Date().toISOString()
-    });
+  setMenuItem: async (itemId: string, itemData: Partial<Product>): Promise<void> => { // Assuming MenuItem is a Product
+    const timestamp = new Date().toISOString();
+    const dataToSet: any = {
+      updatedAt: itemData?.updatedAt || timestamp,
+      // Initialize other Product fields as needed or copy them over
+      name: itemData?.name || '',
+      description: itemData?.description || '',
+      price: itemData?.price || 0,
+      category: itemData?.category || '',
+      isAvailable: itemData?.isAvailable === undefined ? true : itemData.isAvailable, // Default to true if not specified
+      createdAt: itemData?.createdAt || timestamp, // Use provided or new
+    };
+
+    if (itemData && typeof itemData === 'object') {
+      for (const key in itemData) {
+        if (Object.prototype.hasOwnProperty.call(itemData, key)) {
+          // Avoid overwriting properties explicitly set above unless itemData provides them
+          if (!['updatedAt', 'createdAt'].includes(key) || 
+              (key === 'updatedAt' && itemData.updatedAt) || 
+              (key === 'createdAt' && itemData.createdAt) ) {
+            dataToSet[key] = (itemData as any)[key];
+          }
+        }
+      }
+    }
+    // If 'id' field is part of Product model and should store the itemId:
+    // dataToSet.id = itemId;
+
+    return firestoreDB.setDocument('products', itemId, dataToSet as Product); // Changed 'menu' to 'products'
   },
 
   // Get all menu items
   getAllMenuItems: async (): Promise<DocumentData[]> => {
-    return firestoreDB.getCollection('menu');
+    return firestoreDB.getCollection('products'); // Changed 'menu' to 'products'
   },
 
   // Get menu items by category
   getMenuItemsByCategory: async (category: string): Promise<DocumentData[]> => {
-    return firestoreDB.queryCollection('menu', 'category', '==', category);
+    return firestoreDB.queryCollection('products', 'category', '==', category); // Changed 'menu' to 'products'
   },
 
   // Delete menu item
   deleteMenuItem: async (itemId: string): Promise<void> => {
-    return firestoreDB.deleteDocument('menu', itemId);
+    return firestoreDB.deleteDocument('products', itemId); // Changed 'menu' to 'products'
   }
 };
 
 // Shop-related database operations
 export const shopDB = {
   // Add or update shop
-  setShop: async (shopId: string, shopData: any): Promise<void> => {
-    return firestoreDB.setDocument('restaurants', shopId, {
-      ...shopData,
-      updatedAt: new Date().toISOString()
-    });
+  setShop: async (shopId: string, shopData: Partial<Restaurant>): Promise<void> => {
+    const timestamp = new Date().toISOString();
+    const dataToSet: any = {
+      updatedAt: shopData?.updatedAt || timestamp,
+      // Initialize other Restaurant fields as needed or copy them over
+      name: shopData?.name || '', // Assuming name is a required or common field
+      // Add other fields from Restaurant model with defaults if necessary
+    };
+
+    if (shopData && typeof shopData === 'object') {
+      for (const key in shopData) {
+        if (Object.prototype.hasOwnProperty.call(shopData, key)) {
+          if (key !== 'updatedAt' || (key === 'updatedAt' && shopData.updatedAt)) {
+             dataToSet[key] = (shopData as any)[key];
+          }
+        }
+      }
+    }
+    // If 'id' field is part of Restaurant model and should store the shopId:
+    // dataToSet.id = shopId;
+
+    return firestoreDB.setDocument('restaurants', shopId, dataToSet as Restaurant);
   },
 
   // Get all restaurants directly from the restaurants collection
@@ -477,7 +682,8 @@ export const shopDB = {
       console.log("Restaurant reference is a document reference object");
       const docSnap = await getDoc(restaurantRef);
       if (docSnap.exists()) {
-        const result = { id: docSnap.id, ...docSnap.data() };
+        const data = docSnap.data();
+        const result = { id: docSnap.id, ...(data || {}) };
         console.log("Result from reference lookup:", result);
         return result;
       }

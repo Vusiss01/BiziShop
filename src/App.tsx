@@ -6,20 +6,20 @@ import {
   Navigate,
   useLocation,
 } from "react-router-dom";
-import Home from "./components/home";
-import Dashboard from "./components/dashboard";
-import Orders from "./components/orders";
-import Menu from "./components/menu";
-import Analytics from "./components/analytics";
-import Messages from "./components/messages";
-import Settings from "./components/settings";
-import Inventory from "./components/inventory";
-import NotificationsPage from "./components/NotificationsPage";
-import AddItemsScreen from "./components/AddItemsScreen";
+import Home from "./home";
+import Dashboard from "./features/dashboard/components/dashboard";
+import Orders from "./features/orders/components/orders";
+import Menu from "./features/menu/components/menu";
+import Analytics from "./common/components/analytics";
+import Messages from "./features/notifications/components/messages";
+import Settings from "./features/settings/components/settings";
+import Inventory from "./features/inventory/components/inventory";
+import NotificationsPage from "./features/notifications/components/NotificationsPage";
+import AddItemsScreen from "./features/inventory/components/AddItemsScreen";
 import PaymentMethodScreen from "./components/PaymentMethodScreen";
-import OrderConfirmationScreen from "./components/OrderConfirmationScreen";
-import AuthenticationScreen from "./components/AuthenticationScreen";
-import RestaurantList from "./components/RestaurantList";
+import OrderConfirmationScreen from "./features/orders/components/OrderConfirmationScreen";
+import AuthenticationScreen from "./features/authentication/components/AuthenticationScreen";
+import RestaurantList from "./features/menu/components/RestaurantList";
 
 import { hasAccess, UserRole } from "./lib/firebase";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
@@ -79,6 +79,10 @@ function AppContent() {
           />
           <Route
             path="/dashboard"
+            element={<Dashboard />}
+          />
+          <Route
+            path="/protected-dashboard"
             element={
               <ProtectedRoute element={<Dashboard />} path="/dashboard" />
             }

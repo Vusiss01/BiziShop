@@ -1,0 +1,188 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isOwner() {
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'owner';
+    }
+
+    function isDriver() {
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'driver';
+    }
+
+    function isOwnerOf(resourceId) {
+      // Assuming resources that use this function have an 'owner_id' field
+      // For restaurants, this might be resource.data.ownerId (check casing)
+      return isAuthenticated() && resource.data.owner_id == request.auth.uid;
+    }
+
+    function isCurrentUser(userId) {
+      return isAuthenticated() &&
+        request.auth.uid == userId;
+    }
+
+    // New helper functions for BiziShop
+    function isManager() {
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'manager';
+    }
+
+    function isCashier() {
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'cashier';
+    }
+
+    function isShopMember(shopId) {
+      let memberId = shopId + "_" + request.auth.uid;
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/shopMembers/$(memberId));
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isCurrentUser(userId) || isAdmin();
+      allow create: if isAuthenticated() || request.resource.data.keys().hasAny(['role']);
+    }
+
+    // Restaurants collection
+    match /restaurants/{restaurantId} {
+      allow read: if true;
+      allow create: if isAdmin() || isOwner();
+      allow update: if isAdmin() || 
+                      (isOwner() && get(/databases/$(database)/documents/restaurants/$(restaurantId)).data.owner_id == request.auth.uid) || 
+                      (isManager() && isShopMember(restaurantId));
+      allow delete: if isAdmin() || 
+                      (isOwner() && get(/databases/$(database)/documents/restaurants/$(restaurantId)).data.owner_id == request.auth.uid);
+    }
+
+    // Orders collection
+    match /orders/{orderId} {
+      allow read: if isAdmin() ||
+                    (isAuthenticated() && resource.data.user_id == request.auth.uid) ||
+                    (isOwner() && resource.data.restaurant_id in get(/databases/$(database)/documents/users/$(request.auth.uid)).data.restaurant_ids) ||
+                    (isDriver() && resource.data.driver_id == request.auth.uid) ||
+                    ((isManager() || isCashier()) && isShopMember(resource.data.restaurant_id));
+      allow create: if isAuthenticated();
+      allow update: if isAdmin() ||
+                      (isAuthenticated() && resource.data.user_id == request.auth.uid) ||
+                      (isDriver() && resource.data.driver_id == request.auth.uid) ||
+                      ((isManager() || isOwner()) && isShopMember(resource.data.restaurant_id));
+      allow delete: if isAdmin();
+    }
+
+    // User Settings collection
+    match /user_settings/{userId} {
+      allow read, write: if isCurrentUser(userId) || isAdmin();
+    }
+
+    // Documentation collection
+    match /documentation/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // ShopMembers collection
+    match /shopMembers/{memberId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isOwner() || isAdmin();
+    }
+
+    // Products collection (for menu items and inventory enrichment)
+    match /products/{productId} { 
+      allow read: if isAuthenticated(); 
+      allow create, update, delete: if isOwner() || isManager() || isAdmin();
+    }
+    
+    // Categories collection
+    match /categories/{categoryId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isOwner() || isManager() || isAdmin();
+    }
+
+    // Inventory collection
+    match /inventory/{itemId} {
+      allow read: if isAuthenticated(); 
+      allow write: if isOwner() || isManager() || isAdmin(); // create, update, delete
+    }
+
+    // Suppliers collection 
+    match /suppliers/{supplierId} {
+      allow read: if isAuthenticated(); 
+      allow create, update, delete: if isOwner() || isManager() || isAdmin();
+    }
+
+    // Deliveries collection 
+    match /deliveries/{deliveryId} {
+      allow read: if isAuthenticated(); 
+      allow create, update, delete: if isOwner() || isManager() || isAdmin();
+    }
+    
+    // Stock Movements collection
+    match /stockMovements/{movementId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner() || isManager() || isAdmin();
+      allow update: if false; // Typically, stock movements are not updated, only created/deleted
+      allow delete: if isOwner() || isAdmin();
+    }
+
+    // Notifications collection
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated(); // Consider restricting create access further if needed
+      allow update: if isAuthenticated() && resource.data.userId == request.auth.uid; // For marking as read
+    }
+
+    // Settings collection (Shop/App settings)
+    match /settings/{settingId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner() || isAdmin();
+    }
+
+    // Helper function for chat participant check
+    function isChatParticipant(chatDoc) {
+      return isAuthenticated() && request.auth.uid in chatDoc.data.participants;
+    }
+
+    // Chats collection
+    match /chats/{chatId} {
+      allow read: if isChatParticipant(get(/databases/$(database)/documents/chats/$(chatId)));
+      allow create: if isAuthenticated() && request.auth.uid in request.resource.data.participants;
+      // Ensure participants array is not empty and contains the creator
+      // Ensure other required fields like createdAt, lastMessageTimestamp are present if needed on create
+      allow update: if isChatParticipant(get(/databases/$(database)/documents/chats/$(chatId))); 
+                  // Allow updates only to specific fields like lastMessageText, lastMessageTimestamp, unreadCount by participants
+                  // e.g. request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastMessageText', 'lastMessageTimestamp', 'updatedAt', 'unreadCount'])
+
+      // Messages subcollection
+      match /messages/{messageId} {
+        allow read: if isChatParticipant(get(/databases/$(database)/documents/chats/$(chatId)));
+        allow create: if isChatParticipant(get(/databases/$(database)/documents/chats/$(chatId))) && 
+                        request.resource.data.userId == request.auth.uid &&
+                        request.resource.data.keys().hasAll(['text', 'timestamp', 'userId']); // Ensure required fields
+        allow update: if false; // Generally, messages are immutable once sent.
+                                // Could allow sender to update within a time limit:
+                                // resource.data.userId == request.auth.uid && request.time < resource.data.timestamp + duration.value(5, 'm')
+        allow delete: if (isChatParticipant(get(/databases/$(database)/documents/chats/$(chatId))) && resource.data.userId == request.auth.uid); 
+                       // Allow sender to delete their own message. Add || isAdmin() if admins can delete.
+      }
+    }
+
+    // Default deny all other paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
